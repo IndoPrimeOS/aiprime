@@ -1,48 +1,54 @@
 import { Client, Databases, Query } from 'node-appwrite';
 
 export default async ({ req, res, log, error }) => {
-  log("--- Memulai fungsi IprimeAI ---");
-  
   try {
-    // 1. Cek Header
     const userApiKey = req.headers['x-api-key'];
-    if (!userApiKey) {
-      error("Error: x-api-key header tidak ditemukan.");
-      return res.json({ success: false, message: "API Key tidak ditemukan" }, 403);
-    }
+    if (!userApiKey) return res.json({ success: false, message: "API Key missing" }, 403);
 
-    // 2. Inisialisasi Appwrite
     const client = new Client()
       .setEndpoint('https://sgp.cloud.appwrite.io/v1')
       .setProject(process.env.APPWRITE_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
 
     const database = new Databases(client);
-
-    // 3. Cek Database
-    const dbId = process.env.DATABASE_ID;
-    const colId = process.env.COLLECTION_ID;
-
-    const response = await database.listDocuments(dbId, colId, [
+    
+    // Ambil data user
+    const response = await database.listDocuments(process.env.DATABASE_ID, process.env.COLLECTION_ID, [
       Query.equal('apiKey', userApiKey)
     ]);
     
-    if (response.total === 0) {
-      error("Error: API Key tidak terdaftar.");
-      return res.json({ success: false, message: "API Key tidak terdaftar" }, 403);
+    if (response.total === 0) return res.json({ success: false, message: "Invalid API Key" }, 403);
+
+    let user = response.documents[0];
+    const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+
+    // Logika Otomatis: Cek masa aktif premium
+    if (user.status === 'premium' && user.masa_aktif && user.masa_aktif < today) {
+      log(`Masa aktif habis untuk ${user.name}. Mengubah ke status free.`);
+      user = await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
+        status: 'free',
+        masa_aktif: null
+      });
     }
 
-    const user = response.documents[0];
+    // Cek Kuota
+    if (user.quota <= 0) return res.json({ success: false, message: "Kuota habis" }, 403);
 
-    // 4. Cek Kuota
-    if (user.quota <= 0) {
-      error("Error: Kuota habis.");
-      return res.json({ success: false, message: "Kuota Anda habis" }, 403);
-    }
-
-    // 5. Panggil AI
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+
+    // System Prompt Dinamis
+    const systemPrompt = `Kamu adalah IprimeAI, asisten cerdas dari Iprime Studio. 
+    Informasi Pengguna: 
+    - Nama: ${user.name}
+    - Status: ${user.status} ${user.masa_aktif ? '(Aktif sampai: ' + user.masa_aktif + ')' : ''}
+    - Role: ${user.role}
     
+    Aturan:
+    - Berbicaralah dengan nada yang sesuai dengan role pengguna (${user.role}).
+    - Jika pengguna bertanya tentang status atau masa aktifnya, berikan informasi berdasarkan data di atas.
+    - Dilarang menyapa dengan "Selamat datang" di setiap pesan.
+    - Dilarang menyertakan tag <think> atau simbol bintang (*) dalam jawaban Anda.`;
+
     const aiResponse = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -52,7 +58,7 @@ export default async ({ req, res, log, error }) => {
       body: JSON.stringify({
         model: 'MiniMaxAI/MiniMax-M2.7',
         messages: [
-          { role: 'system', content: 'Kamu adalah IprimeAI, asisten cerdas dari Iprime Studio. Aturan: Gunakan pesan pembuka: "Halo! Selamat datang! Saya IprimeAI asisten cerdas, Senang bertemu dengan Anda! Ada yang bisa saya bantu hari ini?". Jawab dengan ramah dalam Bahasa Indonesia. PENTING: Jangan sertakan teks <think> atau simbol bintang sama sekali dalam jawaban Anda.' },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: body.message || "Halo" }
         ]
       })
@@ -61,25 +67,29 @@ export default async ({ req, res, log, error }) => {
     const data = await aiResponse.json();
     let rawContent = data.choices[0].message.content;
     
-    // Regex Pembersih: Menghapus <think>...</think> dan semua simbol bintang
+    // Pembersihan Teks
     let aiContent = rawContent
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .replace(/\*/g, '')
         .trim();
 
-    // 6. Update Kuota
-    await database.updateDocument(dbId, colId, user.$id, { quota: user.quota - 1 });
+    // Update Kuota
+    await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, { quota: user.quota - 1 });
 
     return res.json({
       developer: "Iprime Studio",
       ai_name: "IprimeAI",
-      user: user.name,
+      user_info: { 
+        name: user.name, 
+        role: user.role, 
+        status: user.status,
+        masa_aktif: user.masa_aktif 
+      },
       pesan: aiContent,
       sisa_kuota: user.quota - 1
     });
 
   } catch (err) {
-    error(`CRITICAL ERROR: ${err.message}`);
     return res.json({ success: false, error: err.message }, 500);
   }
 };
