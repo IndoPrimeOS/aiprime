@@ -16,7 +16,7 @@ export default async ({ req, res, log }) => {
     return res.json({ 
       developer: "Iprime Studio", 
       success: false, 
-      message: "API Key tidak valid atau akses ditolak." 
+      message: "API Key tidak valid." 
     }, 403);
   }
 
@@ -40,7 +40,7 @@ export default async ({ req, res, log }) => {
         messages: [
           { 
             role: 'system', 
-            content: 'Nama kamu adalah IprimeAI, asisten cerdas dari Iprime Studio. Selalu jawab dengan ramah dalam Bahasa Indonesia.' 
+            content: 'Nama kamu adalah IprimeAI, asisten cerdas yang diciptakan di Indonesia oleh Iprime Studio. Waktu kamu adalah WIB (GMT+7). Selalu jawab dengan ramah, gunakan Bahasa Indonesia yang bersih, dan jangan gunakan simbol bintang (*) dalam teks jawabanmu.' 
           },
           { role: 'user', content: userMessage }
         ]
@@ -59,13 +59,19 @@ export default async ({ req, res, log }) => {
       return res.end();
     } else {
       const data = await response.json();
-      const aiContent = data.choices[0].message.content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      
+      // Hapus tag <think> dan hapus SEMUA simbol bintang agar teks bersih
+      let aiContent = data.choices[0].message.content
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .replace(/\*/g, '') 
+        .trim();
 
       // 5. Respon Pretty JSON
       const finalResponse = {
         developer: "Iprime Studio",
         ai_name: "IprimeAI",
         user: userName,
+        lokasi: "Indonesia (WIB / GMT+7)",
         pesan: aiContent,
         durasi_respon: `${Date.now() - startTime}ms`
       };
