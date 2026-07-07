@@ -1,13 +1,9 @@
 {
-  "name": "my-ai-proxy",
+  "name": "ai-function",
   "version": "1.0.0",
-  "description": "AI Proxy API for Appwrite Functions",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "type": "module",
+  "main": "src/main.js",
   "dependencies": {
-    "axios": "^1.6.0",
-    "dotenv": "^16.3.1"
+    "node-appwrite": "latest"
   }
 }
