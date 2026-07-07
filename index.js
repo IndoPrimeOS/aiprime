@@ -1,26 +1,12 @@
-export default async ({ req, res, log, error, env }) => {
-  log("Fungsi dimulai...");
+export default async ({ req, res, log, error }) => {
+  // Masukkan kunci Anda langsung di sini untuk testing saja
+  const apiKey = "jg-207376f9eea872657e34996ffbeba0d9e679c3044cc81ecb5d44d960b6bdf308";
+  
+  log("Fungsi berjalan (hardcoded key)...");
 
-  // 1. Pastikan objek env ada
-  if (!env) {
-    error("Objek 'env' tidak tersedia di runtime!");
-    return res.json({ error: "Environment configuration missing" }, 500);
-  }
-
-  // 2. Akses API Key dari env
-  const apiKey = env.AI_API_KEY;
-  if (!apiKey) {
-    error("AI_API_KEY tidak ditemukan di variabel lingkungan!");
-    return res.json({ error: "API Key missing" }, 500);
-  }
-
-  // 3. Proses request
   try {
-    let userMessage = "Hello!";
-    if (req.body) {
-      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      userMessage = body.message || "Hello!";
-    }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const userMessage = body.message || "Hello!";
 
     const response = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
       method: 'POST',
@@ -35,10 +21,11 @@ export default async ({ req, res, log, error, env }) => {
     });
 
     const data = await response.json();
+    log("Response dari AI diterima.");
     return res.json({ success: true, ai_response: data });
 
   } catch (err) {
-    error("Error saat fetch: " + err.message);
+    error("Fatal error: " + err.message);
     return res.json({ success: false, error: err.message }, 500);
   }
 };
