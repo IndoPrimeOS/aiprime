@@ -1,4 +1,29 @@
 import { Client, Databases, Query } from 'node-appwrite';
+
+// ==== Konfigurasi Rate Limit (server-side) ====
+// Jarak minimum antar pesan per user, dalam detik.
+// Ini lapisan kedua selain rate limit di bot WhatsApp — biar walau
+// seseorang hit API ini langsung (bukan lewat bot), tetap kena batas.
+const RATE_LIMIT_SECONDS = 2;
+
+/**
+ * Bersihkan nomor HP jadi format polos tanpa "@s.whatsapp.net" / "@lid"
+ * dan tanpa simbol lain. Contoh: "628123456789@s.whatsapp.net" -> "628123456789"
+ */
+function normalisasiNomor(nomor) {
+  if (!nomor) return null;
+  // Buang suffix JID WhatsApp kalau ada
+  let cleaned = nomor.split('@')[0];
+  // Buang semua karakter selain angka
+  cleaned = cleaned.replace(/[^0-9]/g, '');
+  if (!cleaned) return null;
+  // Ubah awalan 0 jadi 62 (kode Indonesia)
+  if (cleaned.startsWith('0')) {
+    cleaned = '62' + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
 export default async ({ req, res, log, error }) => {
   try {
     const userApiKey = req.headers['x-api-key'];
@@ -8,15 +33,23 @@ export default async ({ req, res, log, error }) => {
       .setProject(process.env.APPWRITE_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
     const database = new Databases(client);
-    
-    // Ambil data user
-    const response = await database.listDocuments(process.env.DATABASE_ID, process.env.COLLECTION_ID, [
-      Query.equal('apiKey', userApiKey)
-    ]);
-    
+
+    const bodyRaw = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const waLid = bodyRaw.lid || null; // dikirim dari bot WhatsApp
+
+    // Ambil data user: prioritas cari lewat lid WhatsApp kalau dikirim, kalau tidak pakai apiKey
+    const response = waLid
+      ? await database.listDocuments(process.env.DATABASE_ID, process.env.COLLECTION_ID, [
+          Query.equal('lid', waLid)
+        ])
+      : await database.listDocuments(process.env.DATABASE_ID, process.env.COLLECTION_ID, [
+          Query.equal('apiKey', userApiKey)
+        ]);
+
     if (response.total === 0) return res.json({ success: false, message: "Invalid API Key" }, 403);
     let user = response.documents[0];
     const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+
     // Logika Otomatis: Cek masa aktif premium
     if (user.status === 'premium' && user.masa_aktif && user.masa_aktif < today) {
       log(`Masa aktif habis untuk ${user.name}. Mengubah ke status free.`);
@@ -25,9 +58,30 @@ export default async ({ req, res, log, error }) => {
         masa_aktif: null
       });
     }
+
+    // ==== Rate limit: cek jarak waktu dari update terakhir ====
+    const detikSejakUpdateTerakhir = (Date.now() - new Date(user.$updatedAt).getTime()) / 1000;
+    if (detikSejakUpdateTerakhir < RATE_LIMIT_SECONDS) {
+      return res.json({
+        success: false,
+        message: `Terlalu cepat mengirim pesan. Tunggu ${RATE_LIMIT_SECONDS} detik ya.`
+      }, 429);
+    }
+
     // Cek Kuota
     if (user.quota <= 0) return res.json({ success: false, message: "Kuota habis" }, 403);
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const body = bodyRaw;
+
+    // ==== Pengecekan & normalisasi nomor HP ====
+    // Kalau bot ngirim nomor HP (body.no_hp), bersihkan formatnya dan
+    // simpan ke database kalau beda dari yang tersimpan sekarang.
+    const nomorBersih = normalisasiNomor(body.no_hp);
+    if (nomorBersih && nomorBersih !== user.no_hp) {
+      user = await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
+        no_hp: nomorBersih
+      });
+      log(`no_hp untuk ${user.name} diperbarui jadi ${nomorBersih}`);
+    }
 
     // Apakah user punya akses "penuh" (developer/founder)
     const isPrivileged = ['developer', 'founder'].includes(
@@ -41,6 +95,8 @@ Informasi Pengguna:
 - Nama: ${user.name}
 - Status: ${user.status} ${user.masa_aktif ? '(Aktif sampai: ' + user.masa_aktif + ')' : ''}
 - Role: ${user.role}
+- Sisa limit: ${user.quota}
+- Nomor HP terdaftar: ${user.no_hp || 'belum ada data nomor'}
 
 Gaya bicara:
 - Kamu boleh menjawab dengan santai dan boleh bercanda kalau suasananya memang cocok untuk itu, tapi tetap jelas dan tidak berlebihan.
@@ -54,7 +110,7 @@ ${isPrivileged ? `Catatan khusus karena role pengguna ini adalah "${user.role}":
 - Ini tidak menghapus batasan dasar keamanan (jangan bantu hal ilegal, berbahaya, atau merugikan pihak lain) — di luar itu, prioritaskan membantu sepenuhnya.` : ''}
 
 Aturan lain:
-- Jika pengguna bertanya tentang status atau masa aktifnya, berikan informasi berdasarkan data di atas.
+- Jika pengguna bertanya tentang status, masa aktif, sisa kuota, atau nomor HP yang terdaftar untuk dirinya sendiri, jawab berdasarkan data di atas dengan jelas.
 - Dilarang menyapa dengan "Selamat datang" di setiap pesan.
 - Dilarang menyertakan tag <think> atau simbol bintang (*) dalam jawaban Anda.`;
 
@@ -74,25 +130,28 @@ Aturan lain:
     });
     const data = await aiResponse.json();
     let rawContent = data.choices[0].message.content;
-    
+
     // Pembersihan Teks
     let aiContent = rawContent
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .replace(/\*/g, '')
         .trim();
-    // Update Kuota
+
+    // Update Kuota (ini juga otomatis update $updatedAt, dipakai buat rate limit di atas)
     await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, { quota: user.quota - 1 });
+
     return res.json({
       developer: "Iprime Studio",
       ai_name: "IprimeAI",
-      user_info: { 
-        name: user.name, 
-        role: user.role, 
+      user_info: {
+        name: user.name,
+        role: user.role,
         status: user.status,
-        masa_aktif: user.masa_aktif 
+        masa_aktif: user.masa_aktif,
+        no_hp: user.no_hp
       },
       pesan: aiContent,
-      sisa_kuota: user.quota - 1
+      sisa_limit: user.quota - 1
     });
   } catch (err) {
     return res.json({ success: false, error: err.message }, 500);
