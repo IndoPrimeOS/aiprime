@@ -6,7 +6,7 @@ export default async ({ req, res, log }) => {
 
   // Inisialisasi Appwrite
   const client = new Client()
-    .setEndpoint('https://cloud.appwrite.io/v1')
+    .setEndpoint('https://sgp.cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
