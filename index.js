@@ -1,8 +1,6 @@
-export default async ({ req, res, log, error }) => {
-  // Masukkan kunci Anda langsung di sini untuk testing saja
-  const apiKey = "jg-207376f9eea872657e34996ffbeba0d9e679c3044cc81ecb5d44d960b6bdf308";
-  
-  log("Fungsi berjalan (hardcoded key)...");
+export default async ({ req, res, log, error, env }) => {
+  // Mengambil dari env yang dikonfigurasi di dashboard Appwrite
+  const apiKey = env.AI_API_KEY; 
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -21,11 +19,9 @@ export default async ({ req, res, log, error }) => {
     });
 
     const data = await response.json();
-    log("Response dari AI diterima.");
     return res.json({ success: true, ai_response: data });
-
   } catch (err) {
-    error("Fatal error: " + err.message);
+    error("Error: " + err.message);
     return res.json({ success: false, error: err.message }, 500);
   }
 };
