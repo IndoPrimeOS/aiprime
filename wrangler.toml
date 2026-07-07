@@ -1,7 +1,0 @@
-name = "aiprime-gateway"
-main = "src/index.js"
-compatibility_date = "2026-07-03"
-
-[[kv_namespaces]]
-binding = "GONKA_KEYS"
-id = "aiprime"
