@@ -1,30 +1,27 @@
 export default async ({ req, res, log, error, env }) => {
-  log("--- Proses Fungsi Dimulai ---");
+  log("Fungsi dimulai...");
 
-  // 1. Validasi Environment Variable
+  // 1. Pastikan objek env ada
+  if (!env) {
+    error("Objek 'env' tidak tersedia di runtime!");
+    return res.json({ error: "Environment configuration missing" }, 500);
+  }
+
+  // 2. Akses API Key dari env
   const apiKey = env.AI_API_KEY;
   if (!apiKey) {
-    error("Fatal Error: AI_API_KEY tidak ditemukan di Environment Variables!");
-    return res.json({ error: "Server Configuration Error" }, 500);
+    error("AI_API_KEY tidak ditemukan di variabel lingkungan!");
+    return res.json({ error: "API Key missing" }, 500);
   }
 
-  // 2. Parsing Input dengan aman
-  let userMessage = "Hello!";
+  // 3. Proses request
   try {
+    let userMessage = "Hello!";
     if (req.body) {
-      // Menangani request baik dalam format string maupun object
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
       userMessage = body.message || "Hello!";
-      log("Pesan diterima dari user: " + userMessage);
     }
-  } catch (e) {
-    log("Catatan: Input body bukan JSON valid, menggunakan pesan default.");
-  }
 
-  // 3. Eksekusi Request ke API GoNKA
-  try {
-    log("Menghubungkan ke API GoNKA...");
-    
     const response = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -37,23 +34,11 @@ export default async ({ req, res, log, error, env }) => {
       })
     });
 
-    // Cek apakah response dari API AI berhasil
-    if (!response.ok) {
-      const errorText = await response.text();
-      error("API AI merespon dengan error: " + errorText);
-      return res.json({ success: false, message: "API AI mengembalikan error", details: errorText }, response.status);
-    }
-
     const data = await response.json();
-    log("API AI berhasil memberikan respon.");
-    
-    return res.json({ 
-      success: true, 
-      ai_response: data 
-    });
+    return res.json({ success: true, ai_response: data });
 
   } catch (err) {
-    error("Fatal Error saat fetch API: " + err.message);
-    return res.json({ success: false, message: "Internal System Error", error: err.message }, 500);
+    error("Error saat fetch: " + err.message);
+    return res.json({ success: false, error: err.message }, 500);
   }
 };
