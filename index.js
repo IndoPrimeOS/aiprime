@@ -1,26 +1,11 @@
 export default async ({ req, res, log, error }) => {
-  log("Fungsi dimulai...");
-
-  // Mengakses variabel lingkungan melalui process.env
-  // Ini adalah cara standar Node.js yang lebih stabil daripada parameter 'env'
+  const startTime = Date.now();
   const apiKey = process.env.AI_API_KEY;
 
-  if (!apiKey) {
-    error("Fatal: AI_API_KEY tidak ditemukan di environment variables!");
-    return res.json({ 
-      success: false, 
-      message: "Konfigurasi server salah: API Key tidak terdeteksi." 
-    }, 500);
-  }
-
   try {
-    // Parsing body request dengan aman
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const userMessage = body.message || "Hello!";
-    
-    log("Memproses pesan: " + userMessage);
+    const userMessage = body.message || "Halo";
 
-    // Memanggil API AI
     const response = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -29,26 +14,35 @@ export default async ({ req, res, log, error }) => {
       },
       body: JSON.stringify({
         model: 'MiniMaxAI/MiniMax-M2.7',
-        messages: [{ role: 'user', content: userMessage }]
+        messages: [
+          { 
+            role: 'system', 
+            content: 'Nama kamu adalah Aiprime, asisten cerdas yang dikembangkan oleh Iprime Studio. Kamu harus selalu menjawab pertanyaan dalam Bahasa Indonesia dengan ramah dan membantu.' 
+          },
+          { role: 'user', content: userMessage }
+        ]
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      error("API AI merespon error: " + errorText);
-      return res.json({ success: false, message: "Error dari API AI", details: errorText }, 500);
-    }
-
     const data = await response.json();
-    log("Respon AI berhasil diterima.");
-    
-    return res.json({ 
-      success: true, 
-      ai_response: data 
+    const duration = Date.now() - startTime;
+
+    // Membersihkan teks jika AI menyertakan tag <think>
+    let aiContent = data.choices[0].message.content;
+    aiContent = aiContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+    return res.json({
+      developer: "Iprime Studio",
+      ai_name: "Aiprime",
+      pesan: aiContent,
+      durasi_respon: `${duration}ms`
     });
 
   } catch (err) {
-    error("Internal Error: " + err.message);
-    return res.json({ success: false, message: "Terjadi kesalahan sistem", error: err.message }, 500);
+    return res.json({ 
+      developer: "Iprime Studio",
+      success: false, 
+      error: err.message 
+    }, 500);
   }
 };
