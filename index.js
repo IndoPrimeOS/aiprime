@@ -40,14 +40,13 @@ export default async ({ req, res, log }) => {
         messages: [
           { 
             role: 'system', 
-            content: 'Nama kamu adalah IprimeAI, asisten cerdas yang diciptakan di Indonesia oleh Iprime Studio. Waktu kamu adalah WIB (GMT+7). Selalu jawab dengan ramah, gunakan Bahasa Indonesia yang bersih, dan jangan gunakan simbol bintang (*) dalam teks jawabanmu.' 
+            content: 'Kamu adalah IprimeAI, asisten cerdas dari Iprime Studio. Aturan: 1. Gunakan pesan pembuka: "Halo! Selamat datang! Saya IprimeAI asisten cerdas, Senang bertemu dengan Anda! Ada yang bisa saya bantu hari ini? Jangan ragu untuk bertanya apa saja, saya siap membantu Anda. 😊". 2. Jika ditanya lokasi, jawab bahwa kamu diciptakan di Indonesia dan berada di zona waktu WIB (GMT+7). 3. Jangan gunakan simbol bintang (*) atau format markdown tebal/miring sama sekali. 4. Jawab dengan ramah dalam Bahasa Indonesia.' 
           },
           { role: 'user', content: userMessage }
         ]
       })
     });
 
-    // 4. Handle Streaming vs Normal
     if (isStreaming) {
       res.setHeader('Content-Type', 'text/event-stream');
       const reader = response.body.getReader();
@@ -60,23 +59,19 @@ export default async ({ req, res, log }) => {
     } else {
       const data = await response.json();
       
-      // Hapus tag <think> dan hapus SEMUA simbol bintang agar teks bersih
+      // Hapus tag <think> dan hapus semua karakter simbol bintang (*) agar bersih
       let aiContent = data.choices[0].message.content
         .replace(/<think>[\s\S]*?<\/think>/g, '')
-        .replace(/\*/g, '') 
+        .replace(/\*/g, '')
         .trim();
 
-      // 5. Respon Pretty JSON
-      const finalResponse = {
+      return res.send(JSON.stringify({
         developer: "Iprime Studio",
         ai_name: "IprimeAI",
         user: userName,
-        lokasi: "Indonesia (WIB / GMT+7)",
         pesan: aiContent,
         durasi_respon: `${Date.now() - startTime}ms`
-      };
-
-      return res.send(JSON.stringify(finalResponse, null, 2), 200, { 'Content-Type': 'application/json' });
+      }, null, 2), 200, { 'Content-Type': 'application/json' });
     }
   } catch (err) {
     return res.json({ 
