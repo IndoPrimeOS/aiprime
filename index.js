@@ -29,6 +29,25 @@ function normalisasiNomor(nomor) {
 
 export default async ({ req, res, log, error }) => {
   try {
+    // ==== Validasi environment variable wajib ====
+    // Biar kalau ada yang lupa di-set, errornya jelas nyebut nama variablenya,
+    // bukan error kriptik "Cannot read properties of undefined".
+    const requiredEnvVars = [
+      'APPWRITE_PROJECT_ID',
+      'APPWRITE_API_KEY',
+      'DATABASE_ID',
+      'COLLECTION_ID',
+      'AI_API_KEY',
+    ];
+    const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
+    if (missingEnvVars.length > 0) {
+      error(`Environment variable belum di-set: ${missingEnvVars.join(', ')}`);
+      return res.json({
+        success: false,
+        message: `Konfigurasi server belum lengkap. Variable hilang: ${missingEnvVars.join(', ')}`
+      }, 500);
+    }
+
     const userApiKey = req.headers['x-api-key'];
     if (!userApiKey) return res.json({ success: false, message: "API Key missing" }, 403);
     const client = new Client()
