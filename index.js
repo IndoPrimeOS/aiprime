@@ -118,6 +118,8 @@ ${isPrivileged ? `Catatan khusus karena role pengguna ini adalah "${user.role}":
 - Ini tidak menghapus batasan dasar keamanan (jangan bantu hal ilegal, berbahaya, atau merugikan pihak lain) — di luar itu, prioritaskan membantu sepenuhnya.` : ''}
 
 Aturan lain:
+- Kamu punya kemampuan mencari informasi terbaru di internet secara mandiri kalau memang dibutuhkan (misalnya soal berita, harga, kejadian terkini, atau info yang sering berubah). Gunakan kemampuan ini hanya kalau pertanyaan user benar-benar butuh info terkini — jangan mencari untuk hal-hal yang sudah kamu tahu atau bersifat umum/statis, biar tidak boros.
+- Kalau kamu mencari info di internet, sebutkan bahwa jawabannya berdasarkan hasil pencarian terbaru.
 - Jika pengguna bertanya tentang status, masa aktif, sisa kuota, atau nomor HP yang terdaftar untuk dirinya sendiri, jawab berdasarkan data di atas dengan jelas.
 - Dilarang menyapa dengan "Selamat datang" di setiap pesan.
 - Dilarang menyertakan tag <think> atau simbol bintang double (**sama**), jika hanya bintang (*sama*) boleh dalam jawaban Anda.`;
@@ -139,6 +141,13 @@ Aturan lain:
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: body.message || "Halo" }
+          ],
+          plugins: [
+            {
+              id: 'web',
+              mode: 'agent',
+              max_searches: 3
+            }
           ]
         }),
         signal: controller.signal
@@ -185,6 +194,19 @@ Aturan lain:
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .replace(/\*\*(.*?)\*\*/g, '$1')
         .trim();
+
+    // Kalau AI pakai hasil web search, tambahkan daftar sumbernya di akhir balasan
+    const citations = data?.choices?.[0]?.message?.annotations
+      ?.filter((a) => a.type === 'url_citation' && a.url_citation?.url)
+      ?.map((a) => a.url_citation);
+
+    if (citations && citations.length > 0) {
+      const daftarSumber = citations
+        .slice(0, 5) // batasi max 5 biar gak kepanjangan
+        .map((c, i) => `${i + 1}. ${c.title || c.url} - ${c.url}`)
+        .join('\n');
+      aiContent += `\n\n_Sumber:_\n${daftarSumber}`;
+    }
 
     // Update Kuota (wajib berhasil)
     await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
