@@ -186,11 +186,21 @@ Aturan lain:
         .replace(/\*\*(.*?)\*\*/g, '$1')
         .trim();
 
-    // Update Kuota + catat waktu pesan terakhir (dipakai rate limit di atas)
+    // Update Kuota (wajib berhasil)
     await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
-      quota: user.quota - 1,
-      last_message_at: new Date().toISOString()
+      quota: user.quota - 1
     });
+
+    // Catat waktu pesan terakhir (buat rate limit). Dibungkus try-catch
+    // terpisah biar kalau kolom "last_message_at" belum/tidak ada,
+    // ini gak bikin seluruh response gagal — user tetap dapat balasan AI.
+    try {
+      await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
+        last_message_at: new Date().toISOString()
+      });
+    } catch (rateLimitErr) {
+      error(`Gagal update last_message_at (cek apakah kolom ini sudah dibuat di Appwrite): ${rateLimitErr.message}`);
+    }
 
     return res.json({
       developer: "Iprime Studio",
