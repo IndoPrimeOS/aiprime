@@ -6,6 +6,9 @@ import { Client, Databases, Query } from 'node-appwrite';
 // seseorang hit API ini langsung (bukan lewat bot), tetap kena batas.
 const RATE_LIMIT_SECONDS = 2;
 
+// Timeout untuk request ke upstream AI, dalam milidetik.
+const AI_TIMEOUT_MS = 30_000;
+
 /**
  * Bersihkan nomor HP jadi format polos tanpa "@s.whatsapp.net" / "@lid"
  * dan tanpa simbol lain. Contoh: "628123456789@s.whatsapp.net" -> "628123456789"
@@ -59,13 +62,18 @@ export default async ({ req, res, log, error }) => {
       });
     }
 
-    // ==== Rate limit: cek jarak waktu dari update terakhir ====
-    const detikSejakUpdateTerakhir = (Date.now() - new Date(user.$updatedAt).getTime()) / 1000;
-    if (detikSejakUpdateTerakhir < RATE_LIMIT_SECONDS) {
-      return res.json({
-        success: false,
-        message: `Terlalu cepat mengirim pesan. Tunggu ${RATE_LIMIT_SECONDS} detik ya.`
-      }, 429);
+    // ==== FIX: Rate limit — pakai field "last_message_at" khusus, ====
+    // bukan $updatedAt, biar gak ke-trigger sama update lain (register,
+    // reset status premium, dll). Kalau field ini belum pernah keisi
+    // (user baru), anggap belum pernah chat, jadi gak kena limit.
+    if (user.last_message_at) {
+      const detikSejakPesanTerakhir = (Date.now() - new Date(user.last_message_at).getTime()) / 1000;
+      if (detikSejakPesanTerakhir < RATE_LIMIT_SECONDS) {
+        return res.json({
+          success: false,
+          message: `Terlalu cepat mengirim pesan. Tunggu ${RATE_LIMIT_SECONDS} detik ya.`
+        }, 429);
+      }
     }
 
     // Cek Kuota
@@ -114,31 +122,75 @@ Aturan lain:
 - Dilarang menyapa dengan "Selamat datang" di setiap pesan.
 - Dilarang menyertakan tag <think> atau simbol bintang double (**sama**), jika hanya bintang (*sama*) boleh dalam jawaban Anda.`;
 
-    const aiResponse = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.AI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'MiniMaxAI/MiniMax-M2.7',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: body.message || "Halo" }
-        ]
-      })
-    });
-    const data = await aiResponse.json();
-    let rawContent = data.choices[0].message.content;
+    // ==== FIX: timeout + validasi response upstream sebelum diproses ====
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
 
-    // Pembersihan Teks
+    let aiResponse;
+    try {
+      aiResponse = await fetch('https://gate.joingonka.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.AI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'MiniMaxAI/MiniMax-M2.7',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: body.message || "Halo" }
+          ]
+        }),
+        signal: controller.signal
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      error(`Gagal menghubungi upstream AI: ${fetchErr.message}`);
+      const pesanError = fetchErr.name === 'AbortError'
+        ? 'Server AI terlalu lama merespon, coba lagi ya.'
+        : 'Server AI sedang tidak bisa dihubungi, coba lagi nanti.';
+      return res.json({ success: false, message: pesanError }, 502);
+    }
+    clearTimeout(timeoutId);
+
+    // Ambil raw text dulu, JANGAN langsung .json() — biar gak crash
+    // kalau upstream balikin HTML/plain text pas error.
+    const rawText = await aiResponse.text();
+
+    if (!aiResponse.ok) {
+      error(`Upstream AI merespon status ${aiResponse.status}: ${rawText.slice(0, 300)}`);
+      return res.json({
+        success: false,
+        message: `Server AI merespon dengan error (status ${aiResponse.status}). Coba lagi nanti.`
+      }, 502);
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (parseErr) {
+      error(`Upstream AI tidak mengembalikan JSON valid: ${rawText.slice(0, 300)}`);
+      return res.json({ success: false, message: 'Server AI mengembalikan format yang tidak dikenal.' }, 502);
+    }
+
+    // Validasi struktur response sebelum diakses
+    const rawContent = data?.choices?.[0]?.message?.content;
+    if (!rawContent) {
+      error(`Struktur response upstream tidak sesuai: ${JSON.stringify(data).slice(0, 300)}`);
+      return res.json({ success: false, message: 'AI tidak memberikan balasan yang valid.' }, 502);
+    }
+
+    // Pembersihan Teks — FIX: cuma hapus bintang DOBEL (**), biar *single* tetap boleh
     let aiContent = rawContent
         .replace(/<think>[\s\S]*?<\/think>/g, '')
-        .replace(/\*/g, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
         .trim();
 
-    // Update Kuota (ini juga otomatis update $updatedAt, dipakai buat rate limit di atas)
-    await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, { quota: user.quota - 1 });
+    // Update Kuota + catat waktu pesan terakhir (dipakai rate limit di atas)
+    await database.updateDocument(process.env.DATABASE_ID, process.env.COLLECTION_ID, user.$id, {
+      quota: user.quota - 1,
+      last_message_at: new Date().toISOString()
+    });
 
     return res.json({
       developer: "Iprime Studio",
@@ -154,6 +206,7 @@ Aturan lain:
       sisa_limit: user.quota - 1
     });
   } catch (err) {
+    error(`Unhandled error: ${err.message}`);
     return res.json({ success: false, error: err.message }, 500);
   }
 };
